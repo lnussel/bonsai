@@ -1,0 +1,108 @@
+#!/bin/bash
+profile=tumbleweed
+base=opensuse
+script="$0"
+if [ -L "$script" ]; then
+	script=`readlink "$script"`
+fi
+profiledir="${script%/*}/profiles"
+libdir="${script%/*}/lib"
+packages=()
+
+while [ "$#" -gt 0 ]; do
+	if [ "$1" = "--profile" ]; then
+		profile="$2"
+		shift 2
+		if [ -z "$profile" ]; then
+			echo "empty profile" >&2
+			exit 1
+		fi
+	elif [ "$1" = "--help" ]; then
+		echo "$script [--profile PROFILE] NAME"
+		exit 0
+	elif [ "${1:0:1}" = '-' ]; then
+		echo "unkown argument $1" >$2
+		exit 1
+	else
+		break
+	fi
+done
+
+. "$profiledir/$profile".sh
+. "$libdir/$base".sh
+
+dest="$1"
+shift
+
+set -e
+if [ -z "$dest" ]; then
+	echo "please specify destination" >&1
+	exit 1
+fi
+if [ "${dest:0:1}" != '/' ]; then
+	dest="/var/lib/machines/$dest"
+fi
+if [ -e "$dest" ]; then
+	echo "$dest exists!"
+	exit 1
+fi
+
+mkdir "$dest"
+
+if [ "${dest#/var/lib/machines/}" != "$dest" ]; then
+	machine_name="${dest#/var/lib/machines/}"
+fi
+
+if [ -z "$packages" ]; then
+	packages=($default_packages)
+fi
+
+cleanup ()
+{
+        set +e
+        for i in proc sys dev; do
+                umount $dest/$i
+        done
+}
+trap cleanup EXIT
+
+mkdir -p "$dest"/{dev,proc,sys}
+for i in sys dev; do
+        mount --bind /$i $dest/$i
+done
+mount -t proc proc $dest/proc
+
+bonsai_install "${packages[@]}"
+
+if [ "$machine_name" ]; then
+	mkdir -p /etc/systemd/nspawn
+	nspawn_file=/etc/systemd/nspawn/$machine_name.nspawn 
+	echo "creating $nspawn_file"
+	cat > $nspawn_file <<-EOF
+		# man 5 systemd.nspawn
+		[Network]
+		Private=off
+
+		#[Files]
+		#Bind=/some/directory
+	EOF
+	if [ ! -x "$dest/bin/systemd" ]; then
+		echo "no systemd in target, container cannot boot. edit $nspawn_file!"
+		cat >> $nspawn_file <<-EOF
+			[Exec]
+			Boot=off
+			Parameters=/bin/echo yes it works
+		EOF
+	else
+		cat >> $nspawn_file <<-EOF
+			#[Exec]
+			#Parameters=systemd.log_level=debug
+		EOF
+	fi
+
+	echo "### useful commands now:"
+	echo "machinectl start $machine_name"
+	echo "machinectl shell $machine_name"
+	echo "machinectl login $machine_name"
+	echo "journalctl -u systemd-nspawn@$machine_name"
+fi
