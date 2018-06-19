@@ -8,6 +8,7 @@ fi
 profiledir="${script%/*}/profiles"
 libdir="${script%/*}/lib"
 packages=()
+shareddir=
 
 while [ "$#" -gt 0 ]; do
 	if [ "$1" = "--profile" ]; then
@@ -15,6 +16,13 @@ while [ "$#" -gt 0 ]; do
 		shift 2
 		if [ -z "$profile" ]; then
 			echo "empty profile" >&2
+			exit 1
+		fi
+	elif [ "$1" = "--share" ]; then
+		shareddir="$2"
+		shift 2
+		if [ -z "$shareddir" -o ! -d "$shareddir" ]; then
+			echo "must be a directory" >&2
 			exit 1
 		fi
 	elif [ "$1" = "--help" ]; then
@@ -82,20 +90,36 @@ if [ "$machine_name" ]; then
 		# man 5 systemd.nspawn
 		[Network]
 		Private=off
-
-		#[Files]
-		#Bind=/some/directory
 	EOF
+
+	if [ -n "$shareddir" ]; then
+		cat >> $nspawn_file <<-EOF
+
+			[Files]
+			Bind=$shareddir
+		EOF
+	else
+		cat >> $nspawn_file <<-EOF
+
+			#[Files]
+			#Bind=/some/directory
+		EOF
+	fi
+	cat >> $nspawn_file <<-EOF
+
+		[Exec]
+		# Needed for Private=off in [Network]
+		PrivateUsers=off
+	EOF
+
 	if [ ! -x "$dest/bin/systemd" ]; then
 		echo "no systemd in target, container cannot boot. edit $nspawn_file!"
 		cat >> $nspawn_file <<-EOF
-			[Exec]
 			Boot=off
 			Parameters=/bin/echo yes it works
 		EOF
 	else
 		cat >> $nspawn_file <<-EOF
-			#[Exec]
 			#Parameters=systemd.log_level=debug
 		EOF
 	fi
